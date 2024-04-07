@@ -1,134 +1,141 @@
+import math
+
 import pygame
 import sys
 import time
+import math
 
 
 class Window:
-	def __init__(self, width, height, cell_size, button_height):
-		pygame.display.set_mode((width, height))
+	def __init__(self, width, height, button_height, scale, game_stopped):
+		display = pygame.display.set_mode((width, height))
 
-		self.game_stopped = False
-		self.sim_field = Simulation_Field(width, height - button_height, cell_size)
+		self.drawer = Drawer(display)
 
-		self.button_field = Stop_Button(width, button_height, height - button_height)
+		self.sim_field = SimulationField(width, height - button_height, scale, self.drawer)
 
-	def update(self):
-		if not self.game_stopped:
-			self.sim_field.generate_next_gen_matrix()
+		self.game_stopped = game_stopped
+		self.button_field = StopButton(width, button_height, height - button_height, game_stopped)
 
-	def on_click(self, mouse_pos, pressed_buttons):
-		if mouse_pos[1] < self.sim_field.height:
-			self.sim_field.on_click(mouse_pos, pressed_buttons)
+	def on_click(self, mouse_pos):
+		if mouse_pos[1] < window_height - button_height:
+			self.sim_field.on_click(mouse_pos)
 		else:
-			if pressed_buttons[0]:
-				self.game_stopped = self.button_field.on_click(self.game_stopped)
+			self.game_stopped = not self.game_stopped
+			self.button_field.on_click(self.game_stopped)
 
 
-class Simulation_Field:
-	def __init__(self, width, height, cell_size):
+class Drawer:
+	def __init__(self, display):
+		self.display = display
+
+	def draw_game_field(self, positions_of_live_cells, scale, width, height):
+		cell_size = scale
+
+		for pos in positions_of_live_cells:
+			x = pos[0] - camera_pos[0]
+			y = pos[1] - camera_pos[1]
+			if (y + 1) * scale <= height:
+				self.draw_cell((x, y), cell_size, width, height)
+			else:
+				self.draw_cut_cell((x, y), cell_size, width, height)
+
+	def draw_cut_cell(self, pos, cell_size, width, height):
+		shape = pygame.Rect(pos[0] * cell_size + width // 2, pos[1] * cell_size, cell_size + height // 2, height - pos[1] * cell_size)
+		pygame.draw.rect(self.display, (255, 255, 255), shape, 0)
+
+	def draw_cell(self, pos, cell_size, width, height):
+		shape = pygame.Rect(pos[0] * cell_size + width // 2, pos[1] * cell_size + height // 2, cell_size, cell_size)
+		pygame.draw.rect(self.display, (255, 255, 255), shape, 0)
+
+	def clear_game_field(self, width, height):
+		shape = pygame.Rect(0, 0, width, height)
+		pygame.draw.rect(self.display, 0, shape, 0)
+
+
+class SimulationField:
+	def __init__(self, width, height, scale, drawer):
 		self.width = width
 		self.height = height
-		self.shape = pygame.Rect(0, 0, self.width, self.height)
+		self.scale = scale
+		self.shape = pygame.Rect(0, 0, width, height)
+		self.drawer = drawer
 
-		self.cell_size = cell_size
-		self.matrix_width = width // cell_size
-		self.matrix_height = height // cell_size
-		self.matrix_sizes = (self.matrix_width, self.matrix_height)
+		self.positions_of_alive_cells = {(0, 1), (0, 2), (0, 3)}
 
-		self.game_matrix = [[Cell((x, y), cell_size) for x in range(self.matrix_width)] for y in range(self.matrix_height)]
+		self.drawer.draw_game_field(self.positions_of_alive_cells, self.scale, self.width, self.height)
 
-	def on_click(self, mouse_pos, pressed_buttons):
-		x = mouse_pos[0] // cell_size
-		y = mouse_pos[1] // cell_size
+	def set_new_scale(self, scale):
+		self.scale = scale
 
-		if pressed_buttons[0]:
-			self.game_matrix[y][x].revive_cell()
-		elif pressed_buttons[2]:
-			self.game_matrix[y][x].kill_cell()
+	def update(self, create_new_frame=True):
+		self.drawer.clear_game_field(self.width, self.height)
 
-	def generate_next_gen_matrix(self):
-		next_gen_matrix = [[None for _ in range(self.matrix_sizes[0])] for _ in range(self.matrix_sizes[1])]
+		if create_new_frame:
+			self.calculate_next_gen()
 
-		self.clear_field()
+		self.drawer.draw_game_field(self.positions_of_alive_cells, self.scale, self.width, self.height)
 
-		for x in range(self.matrix_sizes[1]):
-			for y in range(self.matrix_sizes[0]):
-				next_gen_matrix[x][y] = self.game_matrix[x][y].compute_next_gen_cell(self.game_matrix)
+	def calculate_next_gen(self):
+		# Получает статистику о живых клетках рядом
+		# 0 0 0 0 0 | 1 1 2 1 1
+		# 0 1 0 1 0 | 1 0 2 0 1
+		# 0 0 0 0 0 | 1 1 2 1 1
+		stat = self.get_stat()  # -> dict {pos: count}
 
-		self.game_matrix = next_gen_matrix
+		new_positions = set()
 
-	def clear_field(self):
-		pygame.draw.rect(pygame.display.get_surface(), 0, self.shape, 0)
+		for position in stat.items():
+			if position[1] == 3:
+				new_positions.add(position[0])
+			elif position[1] == 2:
+				if position[0] in self.positions_of_alive_cells:
+					new_positions.add(position[0])
 
-	def print_matrix(self):
-		for x in self.game_matrix:
-			for y in x:
-				print(y.count_alive_neighbors(self.game_matrix), end=" ")
-			print()
+		self.positions_of_alive_cells = new_positions
 
-		for x in self.game_matrix:
-			for y in x:
-				print(y.is_alive, end=" ")
-			print()
+	def get_stat(self):
+		stat = {}
 
+		for pos in self.positions_of_alive_cells:
+			stat = self.get_stat_for_cell(pos[0], pos[1], stat)
 
-class Cell:
-	def __init__(self, cords, size, is_alive=False):
-		self.is_alive = is_alive
-		self.cords = cords
-		self.size = size
-		self.shape = pygame.Rect(self.cords[0] * self.size, self.cords[1] * self.size, self.size, self.size)
+		return stat
 
-		if is_alive:
-			self.revive_cell()
-
-	def count_alive_neighbors(self, matrix_of_game):
-		count = 0
-
-		x_len = len(matrix_of_game[0])
-		y_len = len(matrix_of_game)
-
-		x = self.cords[0]
-		y = self.cords[1]
-
+	@staticmethod
+	def get_stat_for_cell(x, y, stat):
 		for x_offset in range(-1, 2):
 			for y_offset in range(-1, 2):
-				if x_offset == 0 and y_offset == 0:
+				if y_offset == 0 and x_offset == 0:
 					pass
-				elif matrix_of_game[(y + y_offset + y_len) % y_len][(x + x_offset + x_len) % x_len].is_alive:
-					count += 1
+				else:
+					new_pos = (x + x_offset, y + y_offset)
+					if new_pos in stat:
+						stat[new_pos] += 1
+					else:
+						stat[new_pos] = 1
 
-		return count
+		return stat
 
-	def compute_next_gen_cell(self, matrix_of_game):
-		count = self.count_alive_neighbors(matrix_of_game)
+	def on_click(self, mouse_pos):
+		cell_pos = ((mouse_pos[0] - self.width // 2 + camera_pos[0] * self.scale) // self.scale , (mouse_pos[1] - self.height // 2 + camera_pos[1] * self.scale) // self.scale)
 
-		if self.is_alive and (count == 2 or count == 3):
-			new_state = True
-		elif count == 3:
-			new_state = True
+		if cell_pos in self.positions_of_alive_cells:
+			self.positions_of_alive_cells.discard(cell_pos)
 		else:
-			new_state = False
+			self.positions_of_alive_cells.add(cell_pos)
 
-		return Cell(self.cords, self.size, new_state)
-
-	def revive_cell(self):
-		self.is_alive = True
-		pygame.draw.rect(pygame.display.get_surface(), (255, 255, 255), self.shape, 0)
-
-	def kill_cell(self):
-		self.is_alive = False
-		pygame.draw.rect(pygame.display.get_surface(), 0, self.shape, 0)
+		self.update(create_new_frame=False)
 
 
-class Stop_Button:
-	def __init__(self, width, height, vertical_offset):
+class StopButton:
+	def __init__(self, width, height, vertical_offset, game_stopped):
 		self.width = width
 		self.height = height
 		self.vertical_offset = vertical_offset
 		self.shape = pygame.Rect(0, vertical_offset, width, height)
 
-		self.stop_sign()
+		self.on_click(game_stopped)
 
 	def stop_sign(self):
 		screen = pygame.display.get_surface()
@@ -154,9 +161,9 @@ class Stop_Button:
 
 	def on_click(self, game_stopped):
 		if game_stopped:
-			self.stop_sign()
-		else:
 			self.ongoing_sign()
+		else:
+			self.stop_sign()
 
 		return not game_stopped
 
@@ -164,30 +171,60 @@ class Stop_Button:
 if __name__ == "__main__":
 	pygame.init()
 
-	# ЛКМ - создать клетку
-	# ПКМ - удалить клетку
-	cell_size = 20
-	x_cell_count = 20
-	y_cell_count = 20
+	sim_field_scale = 10
+	camera_pos = [-1, 1]
+
+	window_width = 1600
+	window_height = 900
 	button_height = 100
 
-	window = Window(cell_size * x_cell_count, cell_size * y_cell_count + button_height, cell_size, button_height)
+	game_stopped = True
+
+	window = Window(window_width, window_height, button_height, sim_field_scale, game_stopped)
 
 	time_start = time.monotonic()
-	update_interval = 0.1
+
+	fps = 10
+	update_interval = 1 / fps
 
 	while True:
-		if time.monotonic() - time_start > update_interval:
-			window.update()
-			pygame.display.flip()
-			time_start = time.monotonic()
+		if not window.game_stopped:
+			if time.monotonic() - time_start > update_interval:
+				window.sim_field.update(sim_field_scale)
+				pygame.display.flip()
+
+				time_start = time.monotonic()
 
 		for event in pygame.event.get():
-			if event.type == pygame.MOUSEBUTTONDOWN:
-				pressed_buttons = pygame.mouse.get_pressed()
+			if event.type == pygame.KEYDOWN:
+				if event.dict["key"] == pygame.K_UP or event.dict["key"] == pygame.K_w:
+					camera_pos[1] -= 10 / math.pow(sim_field_scale, 1/3)
+
+				elif event.dict["key"] == pygame.K_LEFT or event.dict["key"] == pygame.K_a:
+					camera_pos[0] -= 10 / math.pow(sim_field_scale, 1/3)
+
+				elif event.dict["key"] == pygame.K_DOWN or event.dict["key"] == pygame.K_s:
+					camera_pos[1] += 10 / math.pow(sim_field_scale, 1/3)
+
+				elif event.dict["key"] == pygame.K_RIGHT or event.dict["key"] == pygame.K_d:
+					camera_pos[0] += 10 / math.pow(sim_field_scale, 1/3)
+
+				window.sim_field.update(create_new_frame=False)
 
 			if event.type == pygame.MOUSEBUTTONUP:
-				window.on_click(pygame.mouse.get_pos(), pressed_buttons)
+				if event.dict["button"] == 1:
+					window.on_click(pygame.mouse.get_pos())
+
+				elif event.dict["button"] == 4:
+					sim_field_scale += 1
+					window.sim_field.set_new_scale(sim_field_scale)
+
+				elif event.dict["button"] == 5:
+					sim_field_scale -= 1
+					sim_field_scale = max(1, sim_field_scale)
+					window.sim_field.set_new_scale(sim_field_scale)
+
+				window.sim_field.update(create_new_frame=False)
 
 			if event.type == pygame.QUIT:
 				pygame.quit()
