@@ -1,5 +1,4 @@
 import math
-
 import pygame
 import sys
 import time
@@ -7,10 +6,8 @@ import time
 
 class Window:
     def __init__(self, width: int, height: int, buttons_height: int, toggle_width: int, menu_width: int,
-                 fps_limit=60, game_stopped=True,
-                 scale=20, camera_pos=None):
-        if camera_pos is None:
-            camera_pos = [0, 0]
+                 fps_limit=20, game_stopped=True,
+                 scale=20, camera_pos=(0, 0)):
 
         self.width = width
         self.height = height
@@ -20,69 +17,91 @@ class Window:
         self.update_interval = 1 / fps_limit
         self.game_stopped = game_stopped
 
-        self.sim_field = SimulationField((0, 0), width, height - buttons_height, self, scale, camera_pos)
-        self.game_speed_changer = GameSpeedChanger((toggle_width, height - buttons_height), menu_width, buttons_height, self)
-        self.toggle = GameToggle((0, height - buttons_height), toggle_width, buttons_height, self, game_stopped)
-        self.clear_button = ClearButton((toggle_width + menu_width, height - buttons_height),
-                                        width - toggle_width - menu_width, buttons_height,
-                                        self)
+        self.widgets = []
+        self.layouts = []
 
-        self.buttons = (self.toggle, self.clear_button)
-        self.scrollable = (self.sim_field, self.game_speed_changer)
+        self.layout_base = BasicLayout(self, rotation="vertical")
+        self.layout_base.set_shape((0, 0), width, height)
+        self.sim_field = SimulationField(self, scale, list(camera_pos))
+        self.layout_buttons = BasicLayout(self, rotation="horizontal", size_hint=0.1)
+        self.toggle = GameToggle(self, game_stopped)
+        self.layout_speed_control = BasicLayout(self, rotation="horizontal", size_hint=0.2)
+        self.game_speed_scroll_changer = GameSpeedScrollChanger(self)
+        self.layout_speed_buttons = BasicLayout(self, rotation="vertical", size_hint=0.2)
+        self.game_speed_button_up = GameSpeedButtonUp(self)
+        self.game_speed_button_down = GameSpeedButtonDown(self)
+        self.clear_button = ClearButton(self, size_hint=0.2)
 
-        display = pygame.display.set_mode((width, height))
-        self.drawer = Drawer(self, display)
+        self.layout_base.add_widget(self.sim_field)
+        self.layout_base.add_widget(self.layout_buttons)
+        self.layout_buttons.add_widget(self.toggle)
+        self.layout_buttons.add_widget(self.layout_speed_control)
+        self.layout_speed_control.add_widget(self.game_speed_scroll_changer)
+        self.layout_speed_control.add_widget(self.layout_speed_buttons)
+        self.layout_speed_buttons.add_widget(self.game_speed_button_up)
+        self.layout_speed_buttons.add_widget(self.game_speed_button_down)
+        self.layout_buttons.add_widget(self.clear_button)
+
+        self.calculate_layout_shapes()
+
+        self.display = pygame.display.set_mode((width, height))
+        self.draw_screen()
+
+    def calculate_layout_shapes(self):
+        for layout in self.layouts:
+            layout.calculate_shapes()
 
     def on_release(self, mouse_pos: tuple):
-        for button in self.buttons:
-            if button.is_mouse_on_object(mouse_pos):
-                button.on_release()
+        for widget in reversed(self.widgets):
+            if widget.is_mouse_on_object(mouse_pos):
+                widget.on_release()
                 break
-
-        if self.sim_field.is_mouse_on_object(mouse_pos):
-            self.sim_field.on_release(mouse_pos)
 
     def update(self):
         if not self.game_stopped:
             if time.monotonic() - self.last_frame_time > self.update_interval:
                 self.sim_field.calculate_next_gen()
 
-                self.drawer.draw_screen()
+                self.draw_screen()
                 pygame.display.flip()
 
                 self.last_frame_time += self.update_interval
 
-
-class Drawer:
-    def __init__(self, window: Window, display: pygame.Surface):
-        self.window = window
-        self.display = display
-
-        self.draw_screen()
-
     def draw_screen(self):
-        self.window.sim_field.draw(self.display)
-
-        for button in self.window.buttons:
-            button.draw(self.display)
-
-        self.window.game_speed_changer.draw(self.display)
+        for widget in self.widgets:
+            widget.draw(self.display)
 
         pygame.display.flip()
 
 
+
+
 class Widget:
-    def __init__(self, pos: tuple, width: int, height: int, window: Window):
-        self._pos = pos
-        self._width = width
-        self._height = height
-        self._shape = pygame.Rect(pos[0], pos[1], width, height)
+    def __init__(self, window: Window, size_hint=1.0):
         self._window = window
+        self._pos = (0, 0)
+        self._width = 0
+        self._height = 0
+        self._size_hint = size_hint
+
+        self._shape = pygame.Rect(self._pos[0], self._pos[1], self._width, self._height)
+
+    def set_shape(self, pos=None, width=None, height=None):
+        if pos is not None:
+            self._pos = pos
+        if width is not None:
+            self._width = width
+        if height is not None:
+            self._height = height
+        self._shape = pygame.Rect(self._pos[0], self._pos[1], width, height)
+
+    def get_size_hint(self):
+        return self._size_hint
 
     def draw(self, display: pygame.Surface):
         pass
 
-    def on_release(self, *args):
+    def on_release(self):
         pass
 
     def scroll(self, value):
@@ -95,17 +114,54 @@ class Widget:
         return self._shape.collidepoint(mouse_pos)
 
 
+class BasicLayout(Widget):
+    def __init__(self, window: Window, rotation="vertical", size_hint=1.0):
+        super().__init__(window, size_hint=size_hint)
+        self.rotation = rotation
+
+        self._window.layouts.append(self)
+
+        self.widgets = []
+        self.size_hints = []
+
+    def add_widget(self, widget: Widget):
+        self.widgets.append(widget)
+        self._window.widgets.append(widget)
+        self.size_hints.append(widget.get_size_hint())
+
+    def calculate_shapes(self):
+
+        if self.size_hints.count(1) > 0:
+            smart_size_hint = (1 - sum(self.size_hints)) / self.size_hints.count(1) + 1
+        else:
+            smart_size_hint = 1
+
+        widget_pos = {"horizontal": self._pos[0], "vertical": self._pos[1]}
+        for index in range(len(self.widgets)):
+            layout_size = {"horizontal": self._width, "vertical": self._height}
+            widget_size = layout_size
+            if self.size_hints[index] == 1:
+                widget_size[self.rotation] = layout_size[self.rotation] * smart_size_hint
+            else:
+                widget_size[self.rotation] = layout_size[self.rotation] * self.size_hints[index]
+
+            self.widgets[index].set_shape(pos=(widget_pos["horizontal"], widget_pos["vertical"]),
+                                          width=widget_size["horizontal"], height=widget_size["vertical"])
+
+            widget_pos[self.rotation] += widget_size[self.rotation]
+
+
 class SimulationField(Widget):
     possible_key_numbers = (pygame.K_UP, pygame.K_w,
                             pygame.K_LEFT, pygame.K_a,
                             pygame.K_DOWN, pygame.K_s,
                             pygame.K_RIGHT, pygame.K_d)
     offsets = ((-1, -1), (0, -1), (1, -1),
-               (-1,  0),          (1,  0),
-               (-1,  1), (0,  1), (1,  1))
+               (-1, 0), (1, 0),
+               (-1, 1), (0, 1), (1, 1))
 
-    def __init__(self, pos: tuple, width: int, height: int, window: Window, scale: int, camera_pos: list):
-        super().__init__(pos, width, height, window)
+    def __init__(self, window: Window, scale: int, camera_pos: list, size_hint=1):
+        super().__init__(window=window, size_hint=size_hint)
 
         self.scale = scale
         self.camera_pos = camera_pos
@@ -127,7 +183,8 @@ class SimulationField(Widget):
             if not out_of_bound:
                 self.__draw_cell((x, y), half_width, half_height, cuts, display)
 
-    def on_release(self, mouse_pos: tuple):
+    def on_release(self):
+        mouse_pos = pygame.mouse.get_pos()
         cell_pos = ((self.camera_pos[0] - (self._width / 2 - mouse_pos[0] + self._pos[0] - 1) / self.scale) // 1,
                     (self.camera_pos[1] - (self._height / 2 - mouse_pos[1] + self._pos[1] - 1) / self.scale) // 1)
 
@@ -239,31 +296,11 @@ class SimulationField(Widget):
         return stat
 
 
-class GameSpeedChanger(Widget):
-    def __init__(self, pos: tuple, width: int, height: int, window:Window):
-        super().__init__(pos, width, height, window)
-
-    def draw(self, display: pygame.Surface):
-        font_size = 40
-        font = pygame.font.SysFont('couriernew', font_size)
-
-        text = str(self._window.fps_limit)
-        widget_text = font.render(text, True, (255, 255, 255))
-        place = widget_text.get_rect(center=(self._pos[0] + self._width // 2, self._pos[1] + self._height // 2))
-
-        pygame.draw.rect(display, (100, 100, 100), self._shape, 0)
-        display.blit(widget_text, place)
-
-    def scroll(self, value):
-        self._window.fps_limit = max(1, self._window.fps_limit + value)
-        self._window.update_interval = 1 / self._window.fps_limit
-
-
 class GameToggle(Widget):
     possible_key_numbers = (pygame.K_SPACE,)
 
-    def __init__(self, pos: tuple, width: int, height: int, window: Window, game_stopped: bool):
-        super().__init__(pos, width, height, window)
+    def __init__(self, window: Window, game_stopped: bool, size_hint=1):
+        super().__init__(window=window, size_hint=size_hint)
 
         self.__font_size = 40
         self.__change_text_and_color(game_stopped)
@@ -300,9 +337,72 @@ class GameToggle(Widget):
             self.__color = (100, 200, 100)
 
 
+class GameSpeedScrollChanger(Widget):
+    def __init__(self, window: Window, size_hint=1):
+        super().__init__(window=window, size_hint=size_hint)
+
+    def draw(self, display: pygame.Surface):
+        font_size = 40
+        font = pygame.font.SysFont('couriernew', font_size)
+
+        text = str(self._window.fps_limit) + " fps"
+        widget_text = font.render(text, True, (255, 255, 255))
+        place = widget_text.get_rect(center=(self._pos[0] + self._width // 2, self._pos[1] + self._height // 2))
+
+        pygame.draw.rect(display, (100, 100, 100), self._shape, 0)
+        display.blit(widget_text, place)
+
+    def scroll(self, value):
+        self._window.fps_limit = max(1, self._window.fps_limit + value)
+        self._window.update_interval = 1 / self._window.fps_limit
+
+
+class GameSpeedButtonUp(Widget):
+    def __init__(self, window: Window, size_hint=1):
+        super().__init__(window=window, size_hint=size_hint)
+        self.__color = (100, 200, 100)
+        self.__font_size = 20
+        self.__text = "+"
+
+    def draw(self, display: pygame.Surface):
+        font = pygame.font.SysFont('couriernew', self.__font_size)
+
+        widget_text = font.render(self.__text, True, (255, 255, 255))
+        place = widget_text.get_rect(center=(self._pos[0] + self._width // 2, self._pos[1] + self._height // 2))
+
+        pygame.draw.rect(display, self.__color, self._shape, 0)
+        display.blit(widget_text, place)
+
+    def on_release(self):
+        self._window.fps_limit += 1
+        self._window.update_interval = 1 / self._window.fps_limit
+
+
+class GameSpeedButtonDown(Widget):
+    def __init__(self, window: Window, size_hint=1):
+        super().__init__(window=window, size_hint=size_hint)
+        self.__color = (200, 100, 100)
+        self.__font_size = 20
+        self.__text = "-"
+
+    def draw(self, display: pygame.Surface):
+        font = pygame.font.SysFont('couriernew', self.__font_size)
+
+        widget_text = font.render(self.__text, True, (255, 255, 255))
+        place = widget_text.get_rect(center=(self._pos[0] + self._width // 2, self._pos[1] + self._height // 2))
+
+        pygame.draw.rect(display, self.__color, self._shape, 0)
+        display.blit(widget_text, place)
+
+    def on_release(self):
+        self._window.fps_limit = max(1, self._window.fps_limit - 1)
+        self._window.update_interval = 1 / self._window.fps_limit
+
+
 class ClearButton(Widget):
-    def __init__(self, pos: tuple, width: int, height: int, window: Window):
-        super().__init__(pos, width, height, window)
+
+    def __init__(self, window: Window, size_hint=1):
+        super().__init__(window=window, size_hint=size_hint)
         self.__color = (100, 100, 100)
         self.__font_size = 40
         self.__text = "Clear"
@@ -330,21 +430,21 @@ class EventHandler:
         elif key_number in self.window.toggle.possible_key_numbers:
             self.window.toggle.key_down(key_number)
 
-        self.window.drawer.draw_screen()
+        self.window.draw_screen()
 
     def mouse_button_up(self, key_number: int):
 
         if key_number == 1:
             self.window.on_release(pygame.mouse.get_pos())
 
-        self.window.drawer.draw_screen()
+        self.window.draw_screen()
 
     def mouse_wheel(self, mouse_pos: tuple, value: int):
-        for widget in self.window.scrollable:
+        for widget in self.window.widgets:
             if widget.is_mouse_on_object(mouse_pos):
                 widget.scroll(value)
 
-        self.window.drawer.draw_screen()
+        self.window.draw_screen()
 
 
 if __name__ == "__main__":
@@ -355,8 +455,8 @@ if __name__ == "__main__":
     # WASD | стрелочки - управление камерой
     # Пробел - вкл/выкл паузу
 
-    window_width = 1000
-    window_height = 600
+    window_width = 1600
+    window_height = 900
     buttons_height = window_height // 12
     toggle_width = window_width // 2
     menu_width = window_width // 4
