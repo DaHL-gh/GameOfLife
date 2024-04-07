@@ -3,78 +3,133 @@ import math
 import pygame
 import sys
 import time
-import math
 
 
 class Window:
-	def __init__(self, width, height, button_height, scale, game_stopped):
+	def __init__(self, width, height, button_height, scale, game_stopped, camera_pos):
 		display = pygame.display.set_mode((width, height))
 
 		self.drawer = Drawer(display)
 
-		self.sim_field = SimulationField(width, height - button_height, scale, self.drawer)
+		self.sim_field = SimulationField((0, 0), width, height - button_height, scale, self.drawer, camera_pos)
 
-		self.game_stopped = game_stopped
-		self.button_field = StopButton(width, button_height, height - button_height, game_stopped)
+		self.button_field = StopButton((0, height - button_height), width, button_height, self.drawer, game_stopped)
 
 	def on_click(self, mouse_pos):
 		if mouse_pos[1] < window_height - button_height:
 			self.sim_field.on_click(mouse_pos)
 		else:
-			self.game_stopped = not self.game_stopped
-			self.button_field.on_click(self.game_stopped)
+			self.button_field.on_click()
 
 
 class Drawer:
 	def __init__(self, display):
 		self.display = display
 
-	def draw_game_field(self, positions_of_live_cells, scale, width, height):
+	def draw_button(self, pos, width, height, shape, game_stopped):
+
+		font_size = 40
+		font = pygame.font.SysFont('couriernew', font_size)
+
+		if game_stopped:
+			text = font.render(f"Продолжить", True, (255, 255, 255))
+			pygame.draw.rect(self.display, (200, 100, 100), shape, 0)
+		else:
+			text = font.render(f"Остановить", True, (255, 255, 255))
+			pygame.draw.rect(self.display, (100, 200, 100), shape, 0)
+
+		place = text.get_rect(center=(pos[0] + width // 2, pos[1] + height // 2))
+		self.display.blit(text, place)
+
+	def draw_game_field(self, game_field_pos, width, height, scale, positions_of_live_cells, camera_pos):
+		self.clear_game_field(game_field_pos, width, height)
+
 		cell_size = scale
 
 		for pos in positions_of_live_cells:
 			x = pos[0] - camera_pos[0]
 			y = pos[1] - camera_pos[1]
-			if (y + 1) * scale <= height:
-				self.draw_cell((x, y), cell_size, width, height)
-			else:
-				self.draw_cut_cell((x, y), cell_size, width, height)
 
-	def draw_cut_cell(self, pos, cell_size, width, height):
-		shape = pygame.Rect(pos[0] * cell_size + width // 2, pos[1] * cell_size, cell_size + height // 2, height - pos[1] * cell_size)
+			half_width = width / 2
+			half_height = height / 2
+
+			out_of_bound = False
+
+			cut = set()
+
+			if x * cell_size < -half_width - cell_size:
+				out_of_bound = True
+			elif x * cell_size < -half_width:
+				cut.add("left")
+
+			elif x * cell_size >= half_width:
+				out_of_bound = True
+			elif x * cell_size >= half_width - cell_size:
+				cut.add("right")
+
+			if y * cell_size < -half_height - cell_size:
+				out_of_bound = True
+			elif y * cell_size < -half_height:
+				cut.add("up")
+
+			elif y * cell_size >= half_height:
+				out_of_bound = True
+			elif y * cell_size >= half_height - cell_size:
+				cut.add("bottom")
+
+			if not out_of_bound:
+				self.draw_cell((x, y), cell_size, half_width, half_height, cut, game_field_pos)
+
+	def draw_cell(self, pos, scale, half_width, half_height, cut, game_field_pos):
+		x = pos[0] * scale + half_width
+		y = pos[1] * scale + half_height
+
+		cell_width = scale
+		cell_height = scale
+
+		if "left" in cut:
+			cell_width = x + scale
+			x = 0
+		elif "right" in cut:
+			cell_width = math.ceil(half_width * 2 - x)
+
+		if "up" in cut:
+			cell_height = y + scale
+			y = 0
+		elif "bottom" in cut:
+			cell_height = math.ceil(half_height * 2 - y)
+
+		shape = pygame.Rect(x + game_field_pos[0], y + game_field_pos[1], cell_width, cell_height)
 		pygame.draw.rect(self.display, (255, 255, 255), shape, 0)
 
-	def draw_cell(self, pos, cell_size, width, height):
-		shape = pygame.Rect(pos[0] * cell_size + width // 2, pos[1] * cell_size + height // 2, cell_size, cell_size)
-		pygame.draw.rect(self.display, (255, 255, 255), shape, 0)
-
-	def clear_game_field(self, width, height):
-		shape = pygame.Rect(0, 0, width, height)
+	def clear_game_field(self, pos, width, height):
+		shape = pygame.Rect(pos[0], pos[1], width, height)
 		pygame.draw.rect(self.display, 0, shape, 0)
 
 
 class SimulationField:
-	def __init__(self, width, height, scale, drawer):
+	def __init__(self, pos, width, height, scale, drawer, camera_pos):
+		self.pos = pos
 		self.width = width
 		self.height = height
 		self.scale = scale
-		self.shape = pygame.Rect(0, 0, width, height)
+		self.camera_pos = camera_pos
+
+		self.shape = pygame.Rect(pos[0], pos[1], width, height)
+
 		self.drawer = drawer
 
-		self.positions_of_alive_cells = {(0, 1), (0, 2), (0, 3)}
+		self.positions_of_alive_cells = set()
 
-		self.drawer.draw_game_field(self.positions_of_alive_cells, self.scale, self.width, self.height)
-
-	def set_new_scale(self, scale):
-		self.scale = scale
+		self.drawer.draw_game_field(self.pos, self.width, self.height, self.scale, self.positions_of_alive_cells,
+									self.camera_pos)
 
 	def update(self, create_new_frame=True):
-		self.drawer.clear_game_field(self.width, self.height)
-
 		if create_new_frame:
 			self.calculate_next_gen()
 
-		self.drawer.draw_game_field(self.positions_of_alive_cells, self.scale, self.width, self.height)
+		self.drawer.draw_game_field(self.pos, self.width, self.height, self.scale, self.positions_of_alive_cells,
+									self.camera_pos)
 
 	def calculate_next_gen(self):
 		# Получает статистику о живых клетках рядом
@@ -85,12 +140,12 @@ class SimulationField:
 
 		new_positions = set()
 
-		for position in stat.items():
-			if position[1] == 3:
-				new_positions.add(position[0])
-			elif position[1] == 2:
-				if position[0] in self.positions_of_alive_cells:
-					new_positions.add(position[0])
+		for item in stat.items():
+			if item[1] == 3:
+				new_positions.add(item[0])
+			elif item[1] == 2:
+				if item[0] in self.positions_of_alive_cells:
+					new_positions.add(item[0])
 
 		self.positions_of_alive_cells = new_positions
 
@@ -118,96 +173,88 @@ class SimulationField:
 		return stat
 
 	def on_click(self, mouse_pos):
-		cell_pos = ((mouse_pos[0] - self.width // 2 + camera_pos[0] * self.scale) // self.scale , (mouse_pos[1] - self.height // 2 + camera_pos[1] * self.scale) // self.scale)
-
-		if cell_pos in self.positions_of_alive_cells:
-			self.positions_of_alive_cells.discard(cell_pos)
+		if mouse_pos[0] < self.pos[0] or mouse_pos[0] >= self.pos[0] + self.width:
+			pass
+		elif mouse_pos[1] < self.pos[1] or mouse_pos[1] >= self.pos[1] + self.height:
+			pass
 		else:
-			self.positions_of_alive_cells.add(cell_pos)
+			cell_pos = ((self.camera_pos[0] - (self.width / 2 - mouse_pos[0] + self.pos[0] - 1) / self.scale) // 1,
+						(self.camera_pos[1] - (self.height / 2 - mouse_pos[1] + self.pos[1] - 1) / self.scale) // 1)
 
-		self.update(create_new_frame=False)
+			if cell_pos in self.positions_of_alive_cells:
+				self.positions_of_alive_cells.discard(cell_pos)
+			else:
+				self.positions_of_alive_cells.add(cell_pos)
+
+			self.update(create_new_frame=False)
 
 
 class StopButton:
-	def __init__(self, width, height, vertical_offset, game_stopped):
+	def __init__(self, pos, width, height, drawer, game_stopped):
+		self.pos = pos
 		self.width = width
 		self.height = height
-		self.vertical_offset = vertical_offset
-		self.shape = pygame.Rect(0, vertical_offset, width, height)
+		self.shape = pygame.Rect(pos[0], pos[1], width, height)
+		self.game_stopped = game_stopped
 
-		self.on_click(game_stopped)
+		self.drawer = drawer
 
-	def stop_sign(self):
-		screen = pygame.display.get_surface()
-		r = pygame.Rect(0, self.vertical_offset, self.width, self.height)
-		pygame.draw.rect(screen, (100, 200, 100), r, 0)
+		self.drawer.draw_button(self.pos, self.width, self.height, self.shape, self.game_stopped)
 
-		font_size = 40
-		font = pygame.font.SysFont('couriernew', font_size)
-		text = font.render(f"Остановить", True, (255, 255, 255))
-		place = text.get_rect(center=(self.width // 2, self.vertical_offset + self.height // 2), )
-		screen.blit(text, place)
+	def on_click(self):
+		self.game_stopped = not self.game_stopped
 
-	def ongoing_sign(self):
-		screen = pygame.display.get_surface()
-		r = pygame.Rect(0, self.vertical_offset, self.width, self.height)
-		pygame.draw.rect(screen, (200, 100, 100), r, 0)
-
-		font_size = 40
-		font = pygame.font.SysFont('couriernew', font_size)
-		text = font.render(f"Продолжить", True, (255, 255, 255))
-		place = text.get_rect(center=(self.width // 2, self.vertical_offset + self.height // 2), )
-		screen.blit(text, place)
-
-	def on_click(self, game_stopped):
-		if game_stopped:
-			self.ongoing_sign()
-		else:
-			self.stop_sign()
-
-		return not game_stopped
+		self.drawer.draw_button(self.pos, self.width, self.height, self.shape, self.game_stopped)
 
 
 if __name__ == "__main__":
 	pygame.init()
 
+	# ЛКМ - взаимодействие с объектами
+	# Прокрутка колеса - изменение масштаба отображения
+	# WASD | стрелочки - управление камерой
+	# Пробел - вкл/выкл паузу
+
 	sim_field_scale = 10
-	camera_pos = [-1, 1]
+	camera_position = [0, 0]
 
 	window_width = 1600
 	window_height = 900
-	button_height = 100
+	button_height = 50
 
-	game_stopped = True
+	pause_from_start = True
 
-	window = Window(window_width, window_height, button_height, sim_field_scale, game_stopped)
+	window = Window(window_width, window_height, button_height, sim_field_scale, pause_from_start, camera_position)
 
-	time_start = time.monotonic()
+	last_frame_time = time.monotonic()
 
-	fps = 10
+	fps = 30
 	update_interval = 1 / fps
 
 	while True:
-		if not window.game_stopped:
-			if time.monotonic() - time_start > update_interval:
+		if not window.button_field.game_stopped:
+			if time.monotonic() - last_frame_time > update_interval:
 				window.sim_field.update(sim_field_scale)
 				pygame.display.flip()
 
-				time_start = time.monotonic()
+				last_frame_time = time.monotonic()
 
 		for event in pygame.event.get():
 			if event.type == pygame.KEYDOWN:
 				if event.dict["key"] == pygame.K_UP or event.dict["key"] == pygame.K_w:
-					camera_pos[1] -= 10 / math.pow(sim_field_scale, 1/3)
+					window.sim_field.camera_pos[1] -= window_width / 20 / sim_field_scale
 
 				elif event.dict["key"] == pygame.K_LEFT or event.dict["key"] == pygame.K_a:
-					camera_pos[0] -= 10 / math.pow(sim_field_scale, 1/3)
+					window.sim_field.camera_pos[0] -= window_width / 20 / sim_field_scale
 
 				elif event.dict["key"] == pygame.K_DOWN or event.dict["key"] == pygame.K_s:
-					camera_pos[1] += 10 / math.pow(sim_field_scale, 1/3)
+					window.sim_field.camera_pos[1] += window_width / 20 / sim_field_scale
 
 				elif event.dict["key"] == pygame.K_RIGHT or event.dict["key"] == pygame.K_d:
-					camera_pos[0] += 10 / math.pow(sim_field_scale, 1/3)
+					window.sim_field.camera_pos[0] += window_width / 20 / sim_field_scale
+
+				elif event.dict["key"] == pygame.K_SPACE:
+					window.button_field.on_click()
 
 				window.sim_field.update(create_new_frame=False)
 
@@ -217,12 +264,14 @@ if __name__ == "__main__":
 
 				elif event.dict["button"] == 4:
 					sim_field_scale += 1
-					window.sim_field.set_new_scale(sim_field_scale)
+
+					window.sim_field.scale = sim_field_scale
 
 				elif event.dict["button"] == 5:
 					sim_field_scale -= 1
 					sim_field_scale = max(1, sim_field_scale)
-					window.sim_field.set_new_scale(sim_field_scale)
+
+					window.sim_field.scale = sim_field_scale
 
 				window.sim_field.update(create_new_frame=False)
 
